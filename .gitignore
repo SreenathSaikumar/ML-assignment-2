@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Notebooks / OS
+.ipynb_checkpoints/
+.DS_Store
+
+# Bulky raw UCI download (cleaned CSV in data/)
+wall+following+robot+navigation+data/
+
+# Ruff cache
+.ruff_cache/
