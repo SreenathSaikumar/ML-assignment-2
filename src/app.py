@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -20,6 +21,15 @@ if str(ROOT) not in sys.path:
 from src.dataset import features_and_target, load_dataset  # noqa: E402
 from src.metrics import confusion_and_report, evaluate_classifier, metrics_table  # noqa: E402
 from src.paths import FEATURE_COLS, MODEL_DIR, MODEL_FILES, TARGET_COL, TEST_CSV  # noqa: E402
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+    force=True,
+)
+logger = logging.getLogger("scitos.app")
 
 st.set_page_config(
     page_title="SCITOS · Soft Console",
@@ -361,60 +371,85 @@ def confusion_figure(
     return fig
 
 
-def main() -> None:
-    inject_theme()
-    render_hero()
-
-    if not (MODEL_DIR / "label_encoder.joblib").exists():
-        st.error(
-            "No saved models found in `model/`. "
-            "Run `uv run python -m src.train` or the training notebook first."
-        )
-        st.stop()
-
-    encoder, models = load_artifacts()
-
-    with st.sidebar:
-        st.markdown("### Control deck")
-        uploaded = st.file_uploader("Upload test CSV", type=["csv"])
-        model_name = st.selectbox("Select model", list(MODEL_FILES.keys()))
-        st.markdown(
-            """
-            <div class="sidebar-note">
-              Expected schema<br/>
-              Features: <code>US1</code> … <code>US24</code><br/>
-              Target: <code>class</code>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    try:
-        if uploaded is not None:
-            raw = pd.read_csv(uploaded)
-            data = validate_upload(raw)
-            source_label = "uploaded file"
-        elif TEST_CSV.exists():
-            data = load_dataset(TEST_CSV)
-            source_label = str(TEST_CSV.relative_to(ROOT))
-        else:
-            st.warning("Upload a test CSV or generate `data/test_data.csv` via training.")
-            st.stop()
-    except Exception as exc:  # noqa: BLE001 — show friendly UI errors
-        st.error(f"Could not load data: {exc}")
-        st.stop()
-
-    X, y = features_and_target(data)
-    try:
-        y_enc = encoder.transform(y)
-    except ValueError as exc:
-        st.error(f"Target labels do not match training classes: {exc}")
-        st.stop()
-
+def run_evaluation(
+    *,
+    model_name: str,
+    models: dict[str, Pipeline],
+    encoder: LabelEncoder,
+    X: pd.DataFrame,
+    y_enc: NDArray[np.int64],
+    source_label: str,
+) -> tuple[dict[str, float], NDArray[np.int64], str, dict[str, dict[str, float]]]:
+    logger.info(
+        "Starting evaluation | model=%s | rows=%s | source=%s",
+        model_name,
+        len(X),
+        source_label,
+    )
     model = models[model_name]
     scores = evaluate_classifier(model, X, y_enc)
     cm, report = confusion_and_report(model, X, y_enc, encoder.classes_)
+    logger.info(
+        "Selected model done | Acc=%.4f AUC=%.4f F1=%.4f MCC=%.4f",
+        scores["Accuracy"],
+        scores["AUC"],
+        scores["F1"],
+        scores["MCC"],
+    )
 
+    all_scores: dict[str, dict[str, float]] = {}
+    for name, pipe in models.items():
+        all_scores[name] = evaluate_classifier(pipe, X, y_enc)
+        logger.info(
+            "Compared %s | Acc=%.4f F1=%.4f MCC=%.4f",
+            name,
+            all_scores[name]["Accuracy"],
+            all_scores[name]["F1"],
+            all_scores[name]["MCC"],
+        )
+
+    logger.info("Evaluation finished for %s", model_name)
+    return scores, cm, report, all_scores
+
+
+def load_uploaded_data(uploaded) -> tuple[pd.DataFrame, str]:
+    upload_key = f"{uploaded.name}:{uploaded.size}"
+    is_new_upload = st.session_state.get("upload_key") != upload_key
+    raw = pd.read_csv(uploaded)
+    data = validate_upload(raw)
+    source_label = uploaded.name
+    if is_new_upload:
+        st.session_state.pop("eval_result", None)
+        st.session_state["upload_key"] = upload_key
+        logger.info(
+            "Test file uploaded | name=%s | size=%s bytes",
+            uploaded.name,
+            uploaded.size,
+        )
+        logger.info(
+            "Upload validated | rows=%s | cols=%s | classes=%s",
+            len(data),
+            len(FEATURE_COLS),
+            sorted(data[TARGET_COL].unique().tolist()),
+        )
+    return data, source_label
+
+
+def load_bundled_test_data() -> tuple[pd.DataFrame, str]:
+    if not TEST_CSV.exists():
+        raise FileNotFoundError(
+            "Bundled test CSV missing. Run training to create data/test_data.csv."
+        )
+    data = load_dataset(TEST_CSV)
+    source_label = str(TEST_CSV.relative_to(ROOT))
+    if st.session_state.get("upload_key") != source_label:
+        st.session_state.pop("eval_result", None)
+        st.session_state["upload_key"] = source_label
+        logger.info("Bundled test set selected | path=%s | rows=%s", source_label, len(data))
+    return data, source_label
+
+
+def render_dataset_panel(data: pd.DataFrame, source_label: str, y: pd.Series) -> None:
     st.markdown(
         '<div class="panel"><div class="panel-label">Dataset</div>'
         '<div class="panel-title">Active evaluation set</div>'
@@ -425,14 +460,23 @@ def main() -> None:
     c1.metric("Rows", len(data))
     c2.metric("Features", len(FEATURE_COLS))
     c3.metric("Source", source_label)
-
     with st.expander("Preview rows & class mix"):
         st.dataframe(data.head(20), width="stretch")
         st.dataframe(y.value_counts().rename("count").to_frame(), width="stretch")
 
+
+def render_metrics_panel(
+    *,
+    active_model: str,
+    scores: dict[str, float],
+    cm: NDArray[np.int64],
+    report: str,
+    all_scores: dict[str, dict[str, float]],
+    class_names: list[str] | NDArray[np.str_],
+) -> None:
     st.markdown(
         f'<div class="panel"><div class="panel-label">Model readout</div>'
-        f'<div class="panel-title">{model_name}</div>'
+        f'<div class="panel-title">{active_model}</div>'
         f'<div class="grad-bar"></div></div>',
         unsafe_allow_html=True,
     )
@@ -448,7 +492,7 @@ def main() -> None:
             '<div class="panel-title">Confusion matrix</div></div>',
             unsafe_allow_html=True,
         )
-        fig = confusion_figure(cm, encoder.classes_)
+        fig = confusion_figure(cm, class_names)
         st.pyplot(fig)
         plt.close(fig)
 
@@ -466,8 +510,125 @@ def main() -> None:
         '<div class="grad-bar"></div></div>',
         unsafe_allow_html=True,
     )
-    all_scores = {name: evaluate_classifier(pipe, X, y_enc) for name, pipe in models.items()}
     st.dataframe(metrics_table(all_scores), width="stretch")
+
+
+def main() -> None:
+    inject_theme()
+    render_hero()
+
+    if not (MODEL_DIR / "label_encoder.joblib").exists():
+        st.error(
+            "No saved models found in `model/`. "
+            "Run `uv run python -m src.train` or the training notebook first."
+        )
+        st.stop()
+
+    encoder, models = load_artifacts()
+
+    with st.sidebar:
+        st.markdown("### Control deck")
+        data_mode = st.radio(
+            "Data source",
+            options=["Upload CSV", "Bundled test set"],
+            index=0,
+            help="Metrics stay hidden until you evaluate an upload or explicitly use the bundled test set.",
+        )
+        uploaded = None
+        if data_mode == "Upload CSV":
+            uploaded = st.file_uploader("Upload test CSV", type=["csv"])
+        else:
+            st.caption(
+                "Uses `data/test_data.csv` from training. Nothing is shown until you evaluate."
+            )
+
+        model_name = st.selectbox("Select model", list(MODEL_FILES.keys()))
+        run_clicked = st.button("Start evaluation", type="primary", width="stretch")
+        st.markdown(
+            """
+            <div class="sidebar-note">
+              Expected schema<br/>
+              Features: <code>US1</code> … <code>US24</code><br/>
+              Target: <code>class</code>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if st.session_state.get("data_mode") != data_mode:
+        st.session_state["data_mode"] = data_mode
+        st.session_state.pop("eval_result", None)
+        logger.info("Data source switched to %s", data_mode)
+
+    data: pd.DataFrame | None = None
+    source_label = ""
+    try:
+        if data_mode == "Upload CSV":
+            if uploaded is None:
+                st.info(
+                    "Upload a test CSV, choose a model, then press **Start evaluation**. "
+                    "Or switch to **Bundled test set** to evaluate the held-out training split."
+                )
+                st.stop()
+            data, source_label = load_uploaded_data(uploaded)
+        else:
+            data, source_label = load_bundled_test_data()
+    except Exception as exc:  # noqa: BLE001 — show friendly UI errors
+        logger.exception("Failed to load evaluation data")
+        st.error(f"Could not load data: {exc}")
+        st.stop()
+
+    X, y = features_and_target(data)
+    try:
+        y_enc = encoder.transform(y)
+    except ValueError as exc:
+        st.error(f"Target labels do not match training classes: {exc}")
+        st.stop()
+
+    render_dataset_panel(data, source_label, y)
+
+    if run_clicked:
+        with st.spinner(f"Evaluating `{model_name}` on {len(data)} rows…"):
+            scores, cm, report, all_scores = run_evaluation(
+                model_name=model_name,
+                models=models,
+                encoder=encoder,
+                X=X,
+                y_enc=y_enc,
+                source_label=source_label,
+            )
+        st.session_state["eval_result"] = {
+            "model_name": model_name,
+            "source_label": source_label,
+            "data_mode": data_mode,
+            "scores": scores,
+            "cm": cm,
+            "report": report,
+            "all_scores": all_scores,
+        }
+
+    result = st.session_state.get("eval_result")
+    if result is None:
+        if data_mode == "Upload CSV":
+            st.info("CSV ready. Press **Start evaluation** to compute metrics.")
+        else:
+            st.info(
+                "Bundled test set selected. Press **Start evaluation** to show held-out test metrics."
+            )
+        st.stop()
+
+    if result.get("data_mode") != data_mode:
+        st.info("Data source changed. Press **Start evaluation** again to refresh metrics.")
+        st.stop()
+
+    render_metrics_panel(
+        active_model=result["model_name"],
+        scores=result["scores"],
+        cm=result["cm"],
+        report=result["report"],
+        all_scores=result["all_scores"],
+        class_names=encoder.classes_,
+    )
 
 
 if __name__ == "__main__":
