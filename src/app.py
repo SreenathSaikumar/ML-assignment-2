@@ -336,7 +336,7 @@ def render_hero() -> None:
     st.markdown(
         """
         <div class="hero">
-          <div class="hero-kicker">SCITOS · Soft Console</div>
+          <div class="hero-kicker">SCITOS · Console</div>
           <h1>Wall-Following Robot Navigation</h1>
           <div class="grad-bar"></div>
           <p>
