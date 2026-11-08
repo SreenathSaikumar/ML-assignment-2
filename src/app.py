@@ -19,8 +19,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataset import features_and_target, load_dataset  # noqa: E402
-from src.metrics import confusion_and_report, evaluate_classifier, metrics_table  # noqa: E402
-from src.paths import FEATURE_COLS, MODEL_DIR, MODEL_FILES, TARGET_COL, TEST_CSV  # noqa: E402
+from src.metrics import (
+    confusion_and_report,
+    evaluate_classifier,
+    metrics_table,
+)  # noqa: E402
+from src.paths import (
+    FEATURE_COLS,
+    MODEL_DIR,
+    MODEL_FILES,
+    TARGET_COL,
+    TEST_CSV,
+)  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger("scitos.app")
 
 st.set_page_config(
-    page_title="SCITOS · Soft Console",
+    page_title="SCITOS · Console",
     page_icon="◉",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -304,7 +314,8 @@ footer { visibility: hidden; }
 def load_artifacts() -> tuple[LabelEncoder, dict[str, Pipeline]]:
     encoder: LabelEncoder = joblib.load(MODEL_DIR / "label_encoder.joblib")
     models: dict[str, Pipeline] = {
-        name: joblib.load(MODEL_DIR / filename) for name, filename in MODEL_FILES.items()
+        name: joblib.load(MODEL_DIR / filename)
+        for name, filename in MODEL_FILES.items()
     }
     return encoder, models
 
@@ -445,7 +456,9 @@ def load_bundled_test_data() -> tuple[pd.DataFrame, str]:
     if st.session_state.get("upload_key") != source_label:
         st.session_state.pop("eval_result", None)
         st.session_state["upload_key"] = source_label
-        logger.info("Bundled test set selected | path=%s | rows=%s", source_label, len(data))
+        logger.info(
+            "Bundled test set selected | path=%s | rows=%s", source_label, len(data)
+        )
     return data, source_label
 
 
@@ -618,7 +631,9 @@ def main() -> None:
         st.stop()
 
     if result.get("data_mode") != data_mode:
-        st.info("Data source changed. Press **Start evaluation** again to refresh metrics.")
+        st.info(
+            "Data source changed. Press **Start evaluation** again to refresh metrics."
+        )
         st.stop()
 
     render_metrics_panel(
