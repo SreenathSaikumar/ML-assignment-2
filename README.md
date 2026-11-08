@@ -21,9 +21,10 @@ The collection was designed to show that wall-following is a **non-linearly sepa
 
 Clean CSV: [`data/sensor_readings_24.csv`](data/sensor_readings_24.csv). Held-out test split: [`data/test_data.csv`](data/test_data.csv).
 
-## c. GitHub repository link
+## c. GitHub repository link and Streamlit App URL
 
-[Here](https://github.com/SreenathSaikumar/ML-assignment-2)
+[Github repo here](https://github.com/SreenathSaikumar/ML-assignment-2)
+[Streamlit app deployed here](https://ml-assignment-2-sreenath.streamlit.app)
 
 ## d. Models used
 
